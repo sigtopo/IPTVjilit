@@ -1,0 +1,8 @@
+{
+  "name": "IPTVjilit Pro",
+  "description": "A high-performance IPTV management and playback platform featuring AI-powered channel recommendations and local storage for playlists.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
