@@ -1,18 +1,19 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Playlist, Channel, ViewMode } from './types';
-import { fetchPlaylistFromUrl } from './services/playlistParser';
+import { parseM3U, fetchPlaylistFromUrl } from './services/playlistParser';
 import { 
-  PlayIcon, PlusIcon, HeartIcon, SearchIcon, MenuIcon, ArrowLeftIcon, BotIcon 
+  PlayIcon, PlusIcon, TrashIcon, HeartIcon, SearchIcon, MenuIcon, ArrowLeftIcon, BotIcon 
 } from './components/Icons';
 import VideoPlayer from './components/VideoPlayer';
+import { GoogleGenAI } from "@google/genai";
 
 const App: React.FC = () => {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
   const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
-  const [viewMode, setViewMode] = useState<'dashboard' | 'explorer'>('dashboard');
-  const [activeGroup, setActiveGroup] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.PLAYLISTS);
+  const [sidebarTab, setSidebarTab] = useState<'all' | 'groups' | 'favorites'>('all');
   const [favorites, setFavorites] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -20,12 +21,16 @@ const App: React.FC = () => {
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Persistence
   useEffect(() => {
     const saved = localStorage.getItem('iptv_playlists');
     if (saved) {
       const parsed = JSON.parse(saved);
       setPlaylists(parsed);
-      if (parsed.length > 0) setActivePlaylistId(parsed[0].id);
+      if (parsed.length > 0 && !activePlaylistId) {
+        setActivePlaylistId(parsed[0].id);
+        setViewMode(ViewMode.CHANNELS);
+      }
     }
     const favs = localStorage.getItem('iptv_favorites');
     if (favs) setFavorites(JSON.parse(favs));
@@ -44,39 +49,39 @@ const App: React.FC = () => {
     [playlists, activePlaylistId]
   );
 
-  const groups = useMemo(() => {
-    if (!activePlaylist) return [];
-    const uniqueGroups = Array.from(new Set(activePlaylist.channels.map(c => c.group || 'عام')));
-    return uniqueGroups.sort();
-  }, [activePlaylist]);
-
   const filteredChannels = useMemo(() => {
     if (!activePlaylist) return [];
     let channels = activePlaylist.channels;
     
-    if (activeGroup) {
-      channels = channels.filter(c => (c.group || 'عام') === activeGroup);
+    if (sidebarTab === 'favorites') {
+      channels = channels.filter(c => favorites.includes(c.url));
     }
 
     return channels.filter(c => 
       c.name.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [activePlaylist, searchQuery, activeGroup]);
+  }, [activePlaylist, searchQuery, sidebarTab, favorites]);
 
   const handleAddPlaylist = async () => {
     if (!newPlaylistUrl) return;
     setLoading(true);
     try {
-      const playlist = await fetchPlaylistFromUrl(newPlaylistUrl);
+      let playlist: Playlist;
+      if (newPlaylistUrl.startsWith('http')) {
+        playlist = await fetchPlaylistFromUrl(newPlaylistUrl);
+      } else {
+        alert('Please provide a valid M3U URL');
+        return;
+      }
       if (newPlaylistName) playlist.name = newPlaylistName;
       setPlaylists(prev => [...prev, playlist]);
       setActivePlaylistId(playlist.id);
-      setViewMode('dashboard');
+      setViewMode(ViewMode.CHANNELS);
       setShowAddModal(false);
       setNewPlaylistUrl('');
       setNewPlaylistName('');
     } catch (err) {
-      alert('خطأ في تحميل القائمة، تأكد من الرابط');
+      alert('Error loading playlist: ' + err);
     } finally {
       setLoading(false);
     }
@@ -93,207 +98,155 @@ const App: React.FC = () => {
 
   const playChannel = (channel: Channel) => {
     setActiveChannel(channel);
-    setViewMode('explorer');
   };
 
   return (
-    <div className="flex h-screen bg-[#050507] text-slate-100 overflow-hidden" dir="rtl">
-      {/* 1. القائمة الجانبية الرئيسية (أيقونات) */}
-      <aside className="w-20 bg-[#0a0a0c] border-l border-white/5 flex flex-col items-center py-8 shrink-0 z-40">
-        <div className="w-12 h-12 bg-violet-gradient rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/30 mb-10">
-          <PlayIcon />
+    <div className="flex h-screen bg-[#0a0a0a] text-slate-100 overflow-hidden font-sans">
+      {/* Sidebar - Redesigned to match screenshot */}
+      <aside className="w-[320px] bg-[#121212] border-r border-[#222] flex flex-col shrink-0 z-20 shadow-2xl">
+        {/* Sidebar Header */}
+        <div className="p-4 border-b border-[#222] bg-[#1a1a1a]">
+          <div className="flex items-center justify-between mb-2">
+            <button 
+              onClick={() => setViewMode(ViewMode.PLAYLISTS)}
+              className="text-slate-400 hover:text-white"
+            >
+              <ArrowLeftIcon />
+            </button>
+            <div className="text-center flex-1">
+              <div className="text-sm font-bold truncate px-2">{activePlaylist?.name || "Select Playlist"}</div>
+              <div className="text-[10px] text-slate-500 uppercase">{activePlaylist?.channels.length || 0} Channels</div>
+            </div>
+            <button className="text-slate-400 hover:text-white">
+              <MenuIcon />
+            </button>
+          </div>
+          
+          {/* Filter Tabs */}
+          <div className="flex items-center justify-between mt-4 px-1">
+            <button 
+              onClick={() => setSidebarTab('all')}
+              className={`flex flex-col items-center gap-1 text-[10px] transition-colors ${sidebarTab === 'all' ? 'text-white border-b-2 border-white pb-1' : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              <MenuIcon />
+              <span>All channels</span>
+            </button>
+            <button 
+              onClick={() => setSidebarTab('groups')}
+              className={`flex flex-col items-center gap-1 text-[10px] transition-colors ${sidebarTab === 'groups' ? 'text-white border-b-2 border-white pb-1' : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              <BotIcon />
+              <span>Groups</span>
+            </button>
+            <button 
+              onClick={() => setSidebarTab('favorites')}
+              className={`flex flex-col items-center gap-1 text-[10px] transition-colors ${sidebarTab === 'favorites' ? 'text-white border-b-2 border-white pb-1' : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              <HeartIcon filled={sidebarTab === 'favorites'} />
+              <span>Favorites</span>
+            </button>
+          </div>
         </div>
-        
-        <nav className="flex flex-col gap-6">
+
+        {/* Search Bar */}
+        <div className="p-3">
+          <div className="relative">
+            <input 
+              type="text" 
+              placeholder="Search channel"
+              className="w-full bg-[#2a2a2a] border-none rounded-md py-1.5 pl-3 pr-10 text-xs focus:ring-1 focus:ring-blue-500 outline-none"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none">
+              <SearchIcon />
+            </div>
+          </div>
+        </div>
+
+        {/* Channel List */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar bg-[#0f0f0f]">
+          {filteredChannels.length > 0 ? (
+            filteredChannels.map((channel, index) => (
+              <div 
+                key={channel.id}
+                onClick={() => playChannel(channel)}
+                className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-all border-l-4 ${activeChannel?.url === channel.url ? 'bg-[#1a1a1a] border-red-600' : 'hover:bg-[#151515] border-transparent'}`}
+              >
+                <div className="text-[10px] text-slate-500 w-6 font-mono">{index + 1}.</div>
+                <div className="flex-1 text-xs font-medium truncate text-slate-200">
+                  {channel.name}
+                </div>
+                {channel.logo && (
+                  <div className="w-10 h-6 flex items-center justify-center shrink-0">
+                    <img src={channel.logo} alt="" className="max-w-full max-h-full object-contain" />
+                  </div>
+                )}
+              </div>
+            ))
+          ) : (
+            <div className="p-8 text-center text-slate-600 text-xs italic">
+              No channels found in this section
+            </div>
+          )}
+        </div>
+
+        {/* Bottom Action */}
+        <div className="p-3 border-t border-[#222]">
           <button 
-            onClick={() => setViewMode('dashboard')}
-            className={`p-4 rounded-2xl transition-all ${viewMode === 'dashboard' ? 'bg-indigo-600 text-white shadow-indigo-500/20' : 'text-zinc-600 hover:text-indigo-400'}`}
-          >
-            <MenuIcon />
-          </button>
-          <button 
-            onClick={() => setViewMode('explorer')}
-            className={`p-4 rounded-2xl transition-all ${viewMode === 'explorer' ? 'bg-indigo-600 text-white shadow-indigo-500/20' : 'text-zinc-600 hover:text-indigo-400'}`}
-          >
-            <PlayIcon />
-          </button>
-          <button 
-             onClick={() => setShowAddModal(true)}
-             className="p-4 rounded-2xl text-zinc-600 hover:text-indigo-400 transition-all border border-dashed border-zinc-800"
+            onClick={() => setShowAddModal(true)}
+            className="w-full flex items-center justify-center gap-2 bg-[#1a1a1a] hover:bg-[#252525] text-white text-xs py-2 rounded border border-[#333] transition-colors"
           >
             <PlusIcon />
+            Add Playlist
           </button>
-        </nav>
-
-        <div className="mt-auto p-4 text-zinc-700">
-           <BotIcon />
         </div>
       </aside>
 
-      {/* 2. قائمة التصنيفات (القائمة الثانية) */}
-      {viewMode === 'explorer' && (
-        <aside className="w-72 bg-[#0c0c0f] border-l border-white/5 flex flex-col shrink-0 z-30 animate-in slide-in-from-right duration-300">
-          <div className="p-6 border-b border-white/5">
-            <h2 className="text-xl font-bold text-indigo-400">التصنيفات</h2>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-widest mt-1">اختر فئة القنوات</p>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-            <button 
-              onClick={() => setActiveGroup(null)}
-              className={`w-full flex items-center justify-between px-5 py-4 rounded-2xl transition-all ${!activeGroup ? 'bg-indigo-600/10 border border-indigo-500/30 text-white' : 'text-zinc-500 hover:bg-white/5'}`}
-            >
-              <span className="font-bold">كل القنوات</span>
-              <span className="text-[10px] opacity-50">{activePlaylist?.channels.length}</span>
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col relative bg-black">
+        {/* Dynamic Header for Active Channel */}
+        <header className="h-12 bg-black/90 backdrop-blur-sm border-b border-[#111] flex items-center justify-between px-4 z-10">
+          <div className="flex items-center gap-3">
+            <button className="text-slate-400 hover:text-white">
+              <MenuIcon />
             </button>
-            
-            {groups.map(group => (
-              <button 
-                key={group}
-                onClick={() => setActiveGroup(group)}
-                className={`w-full flex items-center justify-between px-5 py-4 rounded-2xl transition-all ${activeGroup === group ? 'bg-indigo-600/10 border border-indigo-500/30 text-white' : 'text-zinc-500 hover:bg-white/5'}`}
-              >
-                <span className="font-bold truncate ml-2">{group}</span>
-                <div className={`w-1.5 h-1.5 rounded-full ${activeGroup === group ? 'bg-indigo-500' : 'bg-zinc-800'}`}></div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => activeChannel && toggleFavorite(activeChannel, {} as any)}>
+                <HeartIcon filled={activeChannel ? favorites.includes(activeChannel.url) : false} />
               </button>
-            ))}
-          </div>
-        </aside>
-      )}
-
-      {/* 3. منطقة المحتوى الرئيسية */}
-      <main className="flex-1 flex flex-col relative">
-        {/* Header المتطور */}
-        <header className="h-24 px-10 flex items-center justify-between bg-black/20 backdrop-blur-md z-20">
-          <div className="flex items-center gap-6 w-full max-w-2xl">
-            <div className="relative w-full group">
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-500 group-focus-within:text-indigo-400 transition-colors">
-                <SearchIcon />
-              </div>
-              <input 
-                type="text" 
-                placeholder="ابحث عن قناتك المفضلة..."
-                className="w-full bg-[#121216] border border-white/5 rounded-2xl py-3.5 pr-12 pl-6 text-sm focus:ring-2 focus:ring-indigo-500/20 outline-none transition-all placeholder:text-zinc-600"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
+              <h2 className="text-sm font-medium">
+                {activeChannel ? `${activeChannel.name} (HLS)` : "Select a channel to start viewing"}
+              </h2>
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
-            <div className="hidden md:flex flex-col items-end">
-              <span className="text-sm font-bold text-white">{activePlaylist?.name || "لا توجد قائمة"}</span>
-              <span className="text-[10px] text-zinc-500">جودة بث عالية HLS</span>
-            </div>
+          <div className="flex items-center gap-4 text-slate-400">
+            <button className="hover:text-white transition-colors">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+            <button className="hover:text-white transition-colors">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            </button>
           </div>
         </header>
 
-        {/* المساحة التفاعلية */}
-        <div className="flex-1 overflow-y-auto p-10 custom-scrollbar">
-          
-          {viewMode === 'dashboard' && (
-            <div className="animate-in fade-in zoom-in-95 duration-700">
-               <div className="mb-12">
-                  <h1 className="text-5xl font-extrabold mb-4 bg-gradient-to-l from-white to-zinc-500 bg-clip-text text-transparent italic">أهلاً بك في عالم الترفيه</h1>
-                  <p className="text-zinc-500 text-lg max-w-2xl">استعرض آلاف القنوات العالمية بجودة 4K مع نظام تصنيف ذكي وسهولة تامة في الوصول.</p>
-               </div>
-
-               <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
-                  <div className="bg-gradient-to-br from-indigo-600 to-violet-700 p-1 rounded-[2.5rem] shadow-xl shadow-indigo-500/20">
-                     <div className="bg-[#0c0c0f] h-full rounded-[2.4rem] p-8">
-                        <h3 className="text-zinc-500 text-sm font-bold uppercase tracking-widest mb-4">القنوات النشطة</h3>
-                        <div className="text-5xl font-black text-white">{activePlaylist?.channels.length || 0}</div>
-                     </div>
-                  </div>
-                  <div className="bg-[#0c0c0f] border border-white/5 rounded-[2.5rem] p-8 hover:border-indigo-500/30 transition-all">
-                     <h3 className="text-zinc-500 text-sm font-bold uppercase tracking-widest mb-4">المفضلة</h3>
-                     <div className="text-5xl font-black text-white">{favorites.length}</div>
-                  </div>
-                  <div className="bg-[#0c0c0f] border border-white/5 rounded-[2.5rem] p-8 hover:border-indigo-500/30 transition-all">
-                     <h3 className="text-zinc-500 text-sm font-bold uppercase tracking-widest mb-4">التصنيفات</h3>
-                     <div className="text-5xl font-black text-white">{groups.length}</div>
-                  </div>
-               </div>
-
-               {playlists.length === 0 && (
-                  <div className="flex flex-col items-center justify-center py-20 border-2 border-dashed border-zinc-800 rounded-[3rem] bg-zinc-900/10">
-                     <div className="w-20 h-20 bg-indigo-500/10 rounded-full flex items-center justify-center text-indigo-500 mb-6">
-                        <PlusIcon />
-                     </div>
-                     <h2 className="text-2xl font-bold mb-2">ابدأ بإضافة أول قائمة تشغيل</h2>
-                     <p className="text-zinc-600 mb-8">قم بلصق رابط M3U الخاص بك لتبدأ المشاهدة فوراً.</p>
-                     <button 
-                        onClick={() => setShowAddModal(true)}
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-10 py-4 rounded-2xl shadow-lg shadow-indigo-500/20 transition-all active:scale-95"
-                     >
-                        إضافة الآن
-                     </button>
-                  </div>
-               )}
-            </div>
-          )}
-
-          {viewMode === 'explorer' && (
-            <div className="animate-in slide-in-from-bottom-6 duration-500">
-               {/* مشغل الفيديو إذا كانت هناك قناة نشطة */}
-               {activeChannel && (
-                  <div className="mb-10 w-full aspect-video max-h-[60vh] bg-black rounded-[3rem] overflow-hidden border border-white/5 shadow-2xl relative group">
-                     <VideoPlayer channel={activeChannel} />
-                     <div className="absolute top-8 right-8 flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button className="bg-black/60 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white">
-                           <BotIcon />
-                        </button>
-                        <button 
-                           onClick={() => toggleFavorite(activeChannel, {} as any)}
-                           className={`p-4 rounded-2xl border backdrop-blur-xl transition-all ${favorites.includes(activeChannel.url) ? 'bg-rose-600 border-rose-500 text-white' : 'bg-black/60 border-white/10 text-white hover:text-rose-400'}`}
-                        >
-                           <HeartIcon filled={favorites.includes(activeChannel.url)} />
-                        </button>
-                     </div>
-                  </div>
-               )}
-
-               <div className="flex items-center justify-between mb-8">
-                  <h2 className="text-3xl font-black">{activeGroup || 'اكتشف القنوات'}</h2>
-                  <div className="px-4 py-1 bg-zinc-900 rounded-full text-[10px] font-bold text-zinc-500 uppercase tracking-tighter">
-                     نتائج البحث: {filteredChannels.length}
-                  </div>
-               </div>
-
-               {/* قائمة القنوات المكبرة */}
-               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                  {filteredChannels.map(channel => (
-                    <div 
-                      key={channel.id}
-                      onClick={() => playChannel(channel)}
-                      className={`group relative bg-[#0c0c0f] border rounded-[2rem] p-6 transition-all cursor-pointer hover:translate-y-[-8px] hover:shadow-2xl hover:shadow-indigo-500/10 ${activeChannel?.url === channel.url ? 'border-indigo-500 bg-indigo-500/5 ring-4 ring-indigo-500/10' : 'border-white/5 hover:border-indigo-500/40'}`}
-                    >
-                      <div className="flex items-center gap-6">
-                        <div className="w-24 h-24 bg-zinc-900 rounded-2xl flex items-center justify-center p-3 shrink-0 border border-white/5 group-hover:border-indigo-500/30 transition-colors shadow-inner overflow-hidden">
-                          {channel.logo ? (
-                            <img src={channel.logo} alt="" className="w-full h-full object-contain group-hover:scale-110 transition-transform" />
-                          ) : (
-                            <span className="text-3xl font-black text-zinc-700">{channel.name[0]}</span>
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-xl font-black text-white truncate mb-1 leading-tight">{channel.name}</h4>
-                          <p className="text-xs text-zinc-500 font-bold uppercase truncate">{channel.group || 'غير مصنف'}</p>
-                          <div className="mt-3 flex gap-2">
-                             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                             <span className="text-[10px] font-bold text-zinc-600 uppercase">Live Now</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <button 
-                        onClick={(e) => toggleFavorite(channel, e)}
-                        className={`absolute top-4 left-4 p-2 rounded-xl transition-all opacity-0 group-hover:opacity-100 ${favorites.includes(channel.url) ? 'opacity-100 text-rose-500' : 'text-zinc-600 hover:text-rose-500'}`}
-                      >
-                        <HeartIcon filled={favorites.includes(channel.url)} />
-                      </button>
-                    </div>
-                  ))}
-               </div>
+        {/* Video Stage */}
+        <div className="flex-1 flex items-center justify-center">
+          {activeChannel ? (
+            <VideoPlayer channel={activeChannel} />
+          ) : (
+            <div className="text-center space-y-4">
+              <div className="text-slate-800"><PlayIcon /></div>
+              <p className="text-slate-600 text-sm">Select a channel from the sidebar to play</p>
+              {playlists.length === 0 && (
+                <button 
+                  onClick={() => setShowAddModal(true)}
+                  className="bg-blue-600 px-4 py-2 rounded text-xs font-bold"
+                >
+                  Connect Playlist
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -301,63 +254,66 @@ const App: React.FC = () => {
 
       {/* Add Playlist Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[100] flex items-center justify-center p-4">
-          <div className="bg-[#0c0c0f] w-full max-w-xl rounded-[3rem] border border-white/5 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300">
-            <div className="p-10 pb-4">
-               <div className="w-16 h-16 bg-indigo-600/10 rounded-2xl flex items-center justify-center text-indigo-500 mb-6">
-                  <PlusIcon />
-               </div>
-               <h3 className="text-3xl font-black mb-2 italic">إضافة عالم جديد</h3>
-               <p className="text-zinc-500 text-sm">أدخل رابط ملف M3U الخاص بك للوصول إلى مكتبة ضخمة من المحتوى.</p>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-[#1a1a1a] w-full max-w-md rounded-xl border border-[#333] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-5 border-b border-[#333]">
+              <h3 className="text-lg font-bold">Import IPTV Playlist</h3>
             </div>
-            
-            <div className="p-10 pt-4 space-y-6">
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-600 uppercase mr-1">عنوان القائمة</label>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-tighter">Playlist Title</label>
                 <input 
                   type="text" 
-                  placeholder="مثال: الباقة الترفيهية"
-                  className="w-full bg-[#121216] border border-white/5 rounded-2xl py-4 px-6 focus:ring-2 focus:ring-indigo-500/50 outline-none transition-all font-bold"
+                  placeholder="e.g. Arabic & Sports"
+                  className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg py-2.5 px-4 focus:ring-1 focus:ring-blue-600 outline-none text-sm"
                   value={newPlaylistName}
                   onChange={(e) => setNewPlaylistName(e.target.value)}
                 />
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-600 uppercase mr-1">رابط الاشتراك (M3U)</label>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-tighter">M3U URL</label>
                 <input 
                   type="text" 
-                  placeholder="https://example.com/playlist.m3u"
-                  className="w-full bg-[#121216] border border-white/5 rounded-2xl py-4 px-6 focus:ring-2 focus:ring-indigo-500/50 outline-none transition-all font-mono text-sm"
+                  placeholder="https://server.com/playlist.m3u"
+                  className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg py-2.5 px-4 focus:ring-1 focus:ring-blue-600 outline-none text-sm"
                   value={newPlaylistUrl}
                   onChange={(e) => setNewPlaylistUrl(e.target.value)}
                 />
               </div>
             </div>
-
-            <div className="p-10 bg-white/5 flex gap-4">
+            <div className="p-5 bg-black/50 flex gap-3">
               <button 
                 onClick={() => setShowAddModal(false)}
-                className="flex-1 bg-zinc-900 hover:bg-zinc-800 text-white font-black py-5 rounded-2xl transition-all"
+                className="flex-1 bg-[#222] hover:bg-[#333] text-white py-2.5 rounded-lg text-sm font-medium transition-colors"
               >
-                تجاهل
+                Cancel
               </button>
               <button 
                 disabled={loading || !newPlaylistUrl}
                 onClick={handleAddPlaylist}
-                className="flex-1 bg-violet-gradient hover:opacity-90 disabled:opacity-50 text-white font-black py-5 rounded-2xl transition-all shadow-xl shadow-indigo-500/20"
+                className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white py-2.5 rounded-lg text-sm font-bold transition-all"
               >
-                {loading ? 'جاري الاتصال...' : 'تأكيد الاتصال'}
+                {loading ? 'Connecting...' : 'Connect'}
               </button>
             </div>
           </div>
         </div>
       )}
-
+      
       <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #1a1a1f; border-radius: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6366f1; }
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 5px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: #0a0a0a;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #333;
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #444;
+        }
       `}</style>
     </div>
   );
