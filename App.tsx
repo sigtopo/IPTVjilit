@@ -13,7 +13,6 @@ const App: React.FC = () => {
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
   const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.PLAYLISTS);
-  const [sidebarTab, setSidebarTab] = useState<'all' | 'groups' | 'favorites'>('all');
   const [favorites, setFavorites] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -24,14 +23,7 @@ const App: React.FC = () => {
   // Persistence
   useEffect(() => {
     const saved = localStorage.getItem('iptv_playlists');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      setPlaylists(parsed);
-      if (parsed.length > 0 && !activePlaylistId) {
-        setActivePlaylistId(parsed[0].id);
-        setViewMode(ViewMode.CHANNELS);
-      }
-    }
+    if (saved) setPlaylists(JSON.parse(saved));
     const favs = localStorage.getItem('iptv_favorites');
     if (favs) setFavorites(JSON.parse(favs));
   }, []);
@@ -50,40 +42,46 @@ const App: React.FC = () => {
   );
 
   const filteredChannels = useMemo(() => {
-    if (!activePlaylist) return [];
-    let channels = activePlaylist.channels;
-    
-    if (sidebarTab === 'favorites') {
-      channels = channels.filter(c => favorites.includes(c.url));
+    if (viewMode === ViewMode.FAVORITES) {
+      const allChannels = playlists.flatMap(p => p.channels);
+      return allChannels.filter(c => favorites.includes(c.url) && 
+        c.name.toLowerCase().includes(searchQuery.toLowerCase()));
     }
-
-    return channels.filter(c => 
-      c.name.toLowerCase().includes(searchQuery.toLowerCase())
+    if (!activePlaylist) return [];
+    return activePlaylist.channels.filter(c => 
+      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.group?.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [activePlaylist, searchQuery, sidebarTab, favorites]);
+  }, [activePlaylist, searchQuery, viewMode, favorites, playlists]);
 
   const handleAddPlaylist = async () => {
-    if (!newPlaylistUrl) return;
+    if (!newPlaylistUrl && !newPlaylistName) return;
     setLoading(true);
     try {
       let playlist: Playlist;
       if (newPlaylistUrl.startsWith('http')) {
         playlist = await fetchPlaylistFromUrl(newPlaylistUrl);
       } else {
+        // Assume it's text for now if no URL provided (manual upload would use a file reader)
         alert('Please provide a valid M3U URL');
         return;
       }
-      if (newPlaylistName) playlist.name = newPlaylistName;
       setPlaylists(prev => [...prev, playlist]);
-      setActivePlaylistId(playlist.id);
-      setViewMode(ViewMode.CHANNELS);
       setShowAddModal(false);
       setNewPlaylistUrl('');
-      setNewPlaylistName('');
     } catch (err) {
       alert('Error loading playlist: ' + err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const deletePlaylist = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPlaylists(prev => prev.filter(p => p.id !== id));
+    if (activePlaylistId === id) {
+      setActivePlaylistId(null);
+      setViewMode(ViewMode.PLAYLISTS);
     }
   };
 
@@ -98,104 +96,89 @@ const App: React.FC = () => {
 
   const playChannel = (channel: Channel) => {
     setActiveChannel(channel);
+    setViewMode(ViewMode.PLAYER);
+  };
+
+  // Gemini Integration
+  const [aiResponse, setAiResponse] = useState<string | null>(null);
+  const [isAskingAi, setIsAskingAi] = useState(false);
+
+  const askAiAboutChannel = async () => {
+    if (!activeChannel) return;
+    setIsAskingAi(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: `I am watching an IPTV channel called "${activeChannel.name}". It is in the category "${activeChannel.group || 'unknown'}". Tell me what kind of content this channel usually broadcasts and if there are any popular shows on it. Keep it brief.`,
+      });
+      setAiResponse(response.text);
+    } catch (e) {
+      setAiResponse("AI assistant currently unavailable.");
+    } finally {
+      setIsAskingAi(false);
+    }
   };
 
   return (
-    <div className="flex h-screen bg-[#0a0a0a] text-slate-100 overflow-hidden font-sans">
-      {/* Sidebar - Redesigned to match screenshot */}
-      <aside className="w-[320px] bg-[#121212] border-r border-[#222] flex flex-col shrink-0 z-20 shadow-2xl">
-        {/* Sidebar Header */}
-        <div className="p-4 border-b border-[#222] bg-[#1a1a1a]">
-          <div className="flex items-center justify-between mb-2">
-            <button 
-              onClick={() => setViewMode(ViewMode.PLAYLISTS)}
-              className="text-slate-400 hover:text-white"
-            >
-              <ArrowLeftIcon />
-            </button>
-            <div className="text-center flex-1">
-              <div className="text-sm font-bold truncate px-2">{activePlaylist?.name || "Select Playlist"}</div>
-              <div className="text-[10px] text-slate-500 uppercase">{activePlaylist?.channels.length || 0} Channels</div>
-            </div>
-            <button className="text-slate-400 hover:text-white">
-              <MenuIcon />
-            </button>
+    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-72 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0">
+        <div className="p-6 border-b border-slate-800 flex items-center gap-3">
+          <div className="p-2 bg-blue-600 rounded-lg">
+            <PlayIcon />
           </div>
+          <h1 className="text-xl font-bold tracking-tight">IPTVnator <span className="text-blue-500">Pro</span></h1>
+        </div>
+
+        <nav className="flex-1 overflow-y-auto p-4 space-y-2">
+          <button 
+            onClick={() => { setViewMode(ViewMode.PLAYLISTS); setActivePlaylistId(null); }}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${viewMode === ViewMode.PLAYLISTS ? 'bg-blue-600 text-white shadow-lg' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
+          >
+            <MenuIcon />
+            <span className="font-medium">All Playlists</span>
+          </button>
           
-          {/* Filter Tabs */}
-          <div className="flex items-center justify-between mt-4 px-1">
-            <button 
-              onClick={() => setSidebarTab('all')}
-              className={`flex flex-col items-center gap-1 text-[10px] transition-colors ${sidebarTab === 'all' ? 'text-white border-b-2 border-white pb-1' : 'text-slate-500 hover:text-slate-300'}`}
-            >
-              <MenuIcon />
-              <span>All channels</span>
-            </button>
-            <button 
-              onClick={() => setSidebarTab('groups')}
-              className={`flex flex-col items-center gap-1 text-[10px] transition-colors ${sidebarTab === 'groups' ? 'text-white border-b-2 border-white pb-1' : 'text-slate-500 hover:text-slate-300'}`}
-            >
-              <BotIcon />
-              <span>Groups</span>
-            </button>
-            <button 
-              onClick={() => setSidebarTab('favorites')}
-              className={`flex flex-col items-center gap-1 text-[10px] transition-colors ${sidebarTab === 'favorites' ? 'text-white border-b-2 border-white pb-1' : 'text-slate-500 hover:text-slate-300'}`}
-            >
-              <HeartIcon filled={sidebarTab === 'favorites'} />
-              <span>Favorites</span>
-            </button>
-          </div>
-        </div>
+          <button 
+            onClick={() => setViewMode(ViewMode.FAVORITES)}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${viewMode === ViewMode.FAVORITES ? 'bg-red-600 text-white shadow-lg' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
+          >
+            <HeartIcon filled />
+            <span className="font-medium">Favorites</span>
+          </button>
 
-        {/* Search Bar */}
-        <div className="p-3">
-          <div className="relative">
-            <input 
-              type="text" 
-              placeholder="Search channel"
-              className="w-full bg-[#2a2a2a] border-none rounded-md py-1.5 pl-3 pr-10 text-xs focus:ring-1 focus:ring-blue-500 outline-none"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none">
-              <SearchIcon />
-            </div>
+          <div className="pt-4 pb-2 px-4 text-xs font-semibold text-slate-500 uppercase tracking-widest">
+            My Playlists
           </div>
-        </div>
 
-        {/* Channel List */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar bg-[#0f0f0f]">
-          {filteredChannels.length > 0 ? (
-            filteredChannels.map((channel, index) => (
-              <div 
-                key={channel.id}
-                onClick={() => playChannel(channel)}
-                className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-all border-l-4 ${activeChannel?.url === channel.url ? 'bg-[#1a1a1a] border-red-600' : 'hover:bg-[#151515] border-transparent'}`}
-              >
-                <div className="text-[10px] text-slate-500 w-6 font-mono">{index + 1}.</div>
-                <div className="flex-1 text-xs font-medium truncate text-slate-200">
-                  {channel.name}
-                </div>
-                {channel.logo && (
-                  <div className="w-10 h-6 flex items-center justify-center shrink-0">
-                    <img src={channel.logo} alt="" className="max-w-full max-h-full object-contain" />
-                  </div>
-                )}
+          {playlists.map(p => (
+            <div 
+              key={p.id}
+              onClick={() => {
+                setActivePlaylistId(p.id);
+                setViewMode(ViewMode.CHANNELS);
+              }}
+              className={`group flex items-center justify-between px-4 py-3 rounded-xl cursor-pointer transition-all ${activePlaylistId === p.id && viewMode === ViewMode.CHANNELS ? 'bg-slate-800 text-white border border-slate-700' : 'hover:bg-slate-800/50 text-slate-400 hover:text-white'}`}
+            >
+              <div className="flex items-center gap-3 overflow-hidden">
+                <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+                <span className="truncate text-sm">{p.name}</span>
               </div>
-            ))
-          ) : (
-            <div className="p-8 text-center text-slate-600 text-xs italic">
-              No channels found in this section
+              <button 
+                onClick={(e) => deletePlaylist(p.id, e)}
+                className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity"
+              >
+                <TrashIcon />
+              </button>
             </div>
-          )}
-        </div>
+          ))}
+        </nav>
 
-        {/* Bottom Action */}
-        <div className="p-3 border-t border-[#222]">
+        <div className="p-4 border-t border-slate-800">
           <button 
             onClick={() => setShowAddModal(true)}
-            className="w-full flex items-center justify-center gap-2 bg-[#1a1a1a] hover:bg-[#252525] text-white text-xs py-2 rounded border border-[#333] transition-colors"
+            className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white font-medium py-3 rounded-xl border border-slate-700 transition-colors"
           >
             <PlusIcon />
             Add Playlist
@@ -203,50 +186,167 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex flex-col relative bg-black">
-        {/* Dynamic Header for Active Channel */}
-        <header className="h-12 bg-black/90 backdrop-blur-sm border-b border-[#111] flex items-center justify-between px-4 z-10">
-          <div className="flex items-center gap-3">
-            <button className="text-slate-400 hover:text-white">
-              <MenuIcon />
-            </button>
-            <div className="flex items-center gap-2">
-              <button onClick={() => activeChannel && toggleFavorite(activeChannel, {} as any)}>
-                <HeartIcon filled={activeChannel ? favorites.includes(activeChannel.url) : false} />
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col relative overflow-hidden">
+        {/* Header */}
+        <header className="h-20 bg-slate-950/80 backdrop-blur-md border-b border-slate-800 flex items-center justify-between px-8 sticky top-0 z-10">
+          <div className="flex items-center gap-4 flex-1 max-w-2xl">
+            {viewMode === ViewMode.PLAYER && (
+              <button 
+                onClick={() => setViewMode(ViewMode.CHANNELS)}
+                className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors"
+              >
+                <ArrowLeftIcon />
               </button>
-              <h2 className="text-sm font-medium">
-                {activeChannel ? `${activeChannel.name} (HLS)` : "Select a channel to start viewing"}
-              </h2>
+            )}
+            <div className="relative flex-1">
+              <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">
+                <SearchIcon />
+              </div>
+              <input 
+                type="text" 
+                placeholder="Search channels or groups..."
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-blue-600/50 transition-all text-sm"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
             </div>
           </div>
           
-          <div className="flex items-center gap-4 text-slate-400">
-            <button className="hover:text-white transition-colors">
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            </button>
-            <button className="hover:text-white transition-colors">
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-            </button>
+          <div className="flex items-center gap-4">
+            <div className="h-10 w-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-blue-500 shadow-inner">
+              PRO
+            </div>
           </div>
         </header>
 
-        {/* Video Stage */}
-        <div className="flex-1 flex items-center justify-center">
-          {activeChannel ? (
-            <VideoPlayer channel={activeChannel} />
-          ) : (
-            <div className="text-center space-y-4">
-              <div className="text-slate-800"><PlayIcon /></div>
-              <p className="text-slate-600 text-sm">Select a channel from the sidebar to play</p>
-              {playlists.length === 0 && (
-                <button 
-                  onClick={() => setShowAddModal(true)}
-                  className="bg-blue-600 px-4 py-2 rounded text-xs font-bold"
-                >
-                  Connect Playlist
-                </button>
-              )}
+        {/* Dynamic Content Area */}
+        <div className="flex-1 overflow-y-auto p-8">
+          {viewMode === ViewMode.PLAYLISTS && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold">Welcome to IPTVnator Pro</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {playlists.length === 0 ? (
+                  <div className="col-span-full py-20 text-center border-2 border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center gap-4">
+                    <div className="p-6 bg-slate-900 rounded-full">
+                      <PlusIcon />
+                    </div>
+                    <p className="text-slate-400">No playlists found. Add one to start watching.</p>
+                  </div>
+                ) : (
+                  playlists.map(p => (
+                    <div 
+                      key={p.id}
+                      onClick={() => { setActivePlaylistId(p.id); setViewMode(ViewMode.CHANNELS); }}
+                      className="bg-slate-900 p-6 rounded-2xl border border-slate-800 hover:border-blue-500/50 cursor-pointer transition-all hover:translate-y-[-4px] shadow-lg group"
+                    >
+                      <div className="flex justify-between items-start mb-4">
+                        <div className="p-3 bg-blue-600/10 text-blue-500 rounded-xl">
+                          <PlayIcon />
+                        </div>
+                        <span className="text-xs text-slate-500">{p.channels.length} Channels</span>
+                      </div>
+                      <h3 className="text-lg font-bold mb-1 truncate">{p.name}</h3>
+                      <p className="text-slate-500 text-sm">Added {new Date(p.addedAt).toLocaleDateString()}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {(viewMode === ViewMode.CHANNELS || viewMode === ViewMode.FAVORITES) && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold">
+                  {viewMode === ViewMode.FAVORITES ? 'Favorites' : activePlaylist?.name}
+                </h2>
+                <span className="text-sm text-slate-500">{filteredChannels.length} results</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                {filteredChannels.map(channel => (
+                  <div 
+                    key={channel.id}
+                    onClick={() => playChannel(channel)}
+                    className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden hover:border-blue-500/50 cursor-pointer transition-all group relative"
+                  >
+                    <div className="aspect-video bg-slate-800 flex items-center justify-center p-4 relative">
+                      {channel.logo ? (
+                        <img src={channel.logo} alt={channel.name} className="max-w-full max-h-full object-contain" />
+                      ) : (
+                        <div className="text-2xl font-bold text-slate-700">{channel.name[0]}</div>
+                      )}
+                      <div className="absolute inset-0 bg-blue-600/0 group-hover:bg-blue-600/20 flex items-center justify-center transition-all">
+                        <div className="opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100 transition-all p-2 bg-white text-blue-600 rounded-full shadow-xl">
+                          <PlayIcon />
+                        </div>
+                      </div>
+                      <button 
+                        onClick={(e) => toggleFavorite(channel, e)}
+                        className="absolute top-2 right-2 p-1.5 bg-black/40 backdrop-blur-md rounded-lg text-white hover:text-red-500 transition-colors z-20"
+                      >
+                        <HeartIcon filled={favorites.includes(channel.url)} />
+                      </button>
+                    </div>
+                    <div className="p-3">
+                      <h4 className="font-medium text-sm truncate">{channel.name}</h4>
+                      <p className="text-xs text-slate-500 truncate">{channel.group || 'Uncategorized'}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {viewMode === ViewMode.PLAYER && activeChannel && (
+            <div className="h-full flex flex-col gap-6">
+              <div className="flex-1 min-h-[500px]">
+                <VideoPlayer channel={activeChannel} />
+              </div>
+              
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <h2 className="text-2xl font-bold mb-1">{activeChannel.name}</h2>
+                      <p className="text-slate-400">Category: <span className="text-blue-400">{activeChannel.group}</span></p>
+                    </div>
+                    <button 
+                      onClick={(e) => toggleFavorite(activeChannel, e)}
+                      className="p-3 bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors"
+                    >
+                      <HeartIcon filled={favorites.includes(activeChannel.url)} />
+                    </button>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    {activeChannel.tvgId && <span className="px-3 py-1 bg-slate-800 text-slate-300 text-xs rounded-full border border-slate-700">TVG-ID: {activeChannel.tvgId}</span>}
+                    <span className="px-3 py-1 bg-slate-800 text-slate-300 text-xs rounded-full border border-slate-700">HLS Stream</span>
+                  </div>
+                </div>
+
+                <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="text-blue-500"><BotIcon /></div>
+                    <h3 className="font-bold">AI Channel Assistant</h3>
+                  </div>
+                  <div className="flex-1 text-sm text-slate-400 mb-4 leading-relaxed">
+                    {aiResponse ? (
+                      <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700 text-slate-200">
+                        {aiResponse}
+                      </div>
+                    ) : (
+                      "Ask Gemini AI about this channel to learn more about its typical content, location, and popular shows."
+                    )}
+                  </div>
+                  <button 
+                    disabled={isAskingAi}
+                    onClick={askAiAboutChannel}
+                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white py-2.5 rounded-xl font-medium transition-all shadow-lg flex items-center justify-center gap-2"
+                  >
+                    {isAskingAi ? "Thinking..." : "Get AI Insights"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -254,67 +354,54 @@ const App: React.FC = () => {
 
       {/* Add Playlist Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="bg-[#1a1a1a] w-full max-w-md rounded-xl border border-[#333] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-            <div className="p-5 border-b border-[#333]">
-              <h3 className="text-lg font-bold">Import IPTV Playlist</h3>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-slate-900 w-full max-w-md rounded-2xl border border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-6 border-b border-slate-800">
+              <h3 className="text-xl font-bold">Add New Playlist</h3>
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-tighter">Playlist Title</label>
+                <label className="block text-sm font-medium text-slate-400 mb-1.5">Playlist Name (optional)</label>
                 <input 
                   type="text" 
-                  placeholder="e.g. Arabic & Sports"
-                  className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg py-2.5 px-4 focus:ring-1 focus:ring-blue-600 outline-none text-sm"
+                  placeholder="e.g. Sports Pack"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2.5 px-4 focus:outline-none focus:ring-2 focus:ring-blue-600/50 transition-all text-sm"
                   value={newPlaylistName}
                   onChange={(e) => setNewPlaylistName(e.target.value)}
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-tighter">M3U URL</label>
+                <label className="block text-sm font-medium text-slate-400 mb-1.5">M3U URL</label>
                 <input 
                   type="text" 
-                  placeholder="https://server.com/playlist.m3u"
-                  className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg py-2.5 px-4 focus:ring-1 focus:ring-blue-600 outline-none text-sm"
+                  placeholder="https://example.com/playlist.m3u"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2.5 px-4 focus:outline-none focus:ring-2 focus:ring-blue-600/50 transition-all text-sm"
                   value={newPlaylistUrl}
                   onChange={(e) => setNewPlaylistUrl(e.target.value)}
                 />
               </div>
+              <p className="text-xs text-slate-500 leading-relaxed italic">
+                Note: Ensure the URL points to a valid M3U/M3U8 file. We currently support HLS playback natively.
+              </p>
             </div>
-            <div className="p-5 bg-black/50 flex gap-3">
+            <div className="p-6 bg-slate-950/50 flex gap-3">
               <button 
                 onClick={() => setShowAddModal(false)}
-                className="flex-1 bg-[#222] hover:bg-[#333] text-white py-2.5 rounded-lg text-sm font-medium transition-colors"
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-medium py-2.5 rounded-xl transition-colors"
               >
                 Cancel
               </button>
               <button 
-                disabled={loading || !newPlaylistUrl}
+                disabled={loading}
                 onClick={handleAddPlaylist}
-                className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white py-2.5 rounded-lg text-sm font-bold transition-all"
+                className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white font-medium py-2.5 rounded-xl transition-all shadow-lg"
               >
-                {loading ? 'Connecting...' : 'Connect'}
+                {loading ? 'Processing...' : 'Add Playlist'}
               </button>
             </div>
           </div>
         </div>
       )}
-      
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 5px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: #0a0a0a;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #333;
-          border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #444;
-        }
-      `}</style>
     </div>
   );
 };

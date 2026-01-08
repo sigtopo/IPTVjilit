@@ -1,6 +1,6 @@
 {
-  "name": "IPTVjilit Pro",
-  "description": "A high-performance IPTV management and playback platform featuring AI-powered channel recommendations and local storage for playlists.",
+  "name": "IPTVnator Pro",
+  "description": "A high-performance IPTV management and playback platform inspired by IPTVnator, featuring AI-powered channel recommendations and local storage for playlists.",
   "requestFramePermissions": [
     "camera",
     "microphone"
