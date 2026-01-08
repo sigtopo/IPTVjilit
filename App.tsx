@@ -128,7 +128,7 @@ const App: React.FC = () => {
           <div className="p-2 bg-blue-600 rounded-lg">
             <PlayIcon />
           </div>
-          <h1 className="text-xl font-bold tracking-tight">IPTVnator <span className="text-blue-500">Pro</span></h1>
+          <h1 className="text-xl font-bold tracking-tight">IPTVjilit <span className="text-blue-500">Pro</span></h1>
         </div>
 
         <nav className="flex-1 overflow-y-auto p-4 space-y-2">
@@ -214,9 +214,13 @@ const App: React.FC = () => {
           </div>
           
           <div className="flex items-center gap-4">
-            <div className="h-10 w-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-blue-500 shadow-inner">
-              PRO
-            </div>
+            <button 
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-xl text-sm font-semibold shadow-lg transition-all active:scale-95"
+            >
+              <PlusIcon />
+              Add Playlist
+            </button>
           </div>
         </header>
 
@@ -224,7 +228,7 @@ const App: React.FC = () => {
         <div className="flex-1 overflow-y-auto p-8">
           {viewMode === ViewMode.PLAYLISTS && (
             <div className="space-y-6">
-              <h2 className="text-2xl font-bold">Welcome to IPTVnator Pro</h2>
+              <h2 className="text-2xl font-bold">Welcome to IPTVjilit Pro</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {playlists.length === 0 ? (
                   <div className="col-span-full py-20 text-center border-2 border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center gap-4">
